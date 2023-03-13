@@ -5,10 +5,12 @@
 #include <unistd.h>
 #include <string.h>
 #include <ctype.h>
+#include <uuid/uuid.h>
 
 #define MAX_HOST_SZ (128)
-#define DEF_BUF_SZ_MB (32)
+#define DEF_BUF_SZ (456131)
 #define DEF_ITERS (10)
+#define LOG_REFRESH_TIME_SEC (900)
 
 int world_size, world_rank;
 
@@ -16,7 +18,7 @@ void print_usage()
 {
     fprintf(stderr, "Usage: <program> \n -f <group1-hosts> \n -n <group1-size> \n \
 		    -d <use-dotnet 0|1> \n -p <ppn> \n -i <iters> \n \
-		    -b <buffer-size-in-MB>\n -u <uni-directional (MPI-only) 0|1> \n -r <number-of-runs>");
+		    -b <buffer-size>\n -u <uni-directional (MPI-only) 0|1> \n -r <number-of-runs>");
 }
 
 int strnicmp(const char *s1, const char *s2, size_t n)
@@ -100,8 +102,38 @@ void do_mpi_benchmark_unidir(int my_group, int my_rank, int peer_rank, char *pee
         fprintf(stderr, "[Run#: %d] [Flow: %s - %s] %d: Bandwidth: %.2lf MB/sec\n", run_idx, my_host, peer_host, my_rank, bandwidth);
 }
 
-void do_launch_dotnet_bench()
+void do_launch_dotnet_bench(int my_group, int my_rank, int peer_rank, char *peer_host, char *my_host,
+                             int iters, void *buffer_tx, void *buffer_rx, int buff_len, int run_idx)
 {
+    double t_start = 0.0, t_end = 0.0, t_total = 0.0, bandwidth = 0.0;
+
+    t_start = MPI_Wtime();
+    for (int i = 0; i < iters; i++)
+    {
+        if (my_group == 0)
+        {
+            // server
+            // dotnet /mnt/anfvol/tepati/clientserverapp/bin/Release/net6.0/clientserverapp.dll server 127.0.0.1 40000 1 10 456131 10 0 true
+            char command[100];
+            sprintf(command, "sleep 1");
+            system(command);
+        }
+        else
+        {
+            // dotnet /home/tepati/clientserverapp/bin/Release/net6.0/clientserverapp.dll client 10.0.0.254 40000 10 456131 10 0 true
+            char command[100];
+            sprintf(command, "sleep 1");
+            system(command);
+        }
+    }
+
+    t_end = MPI_Wtime();
+    t_total = t_end - t_start;
+
+    bandwidth = ((1 * buff_len * iters) / (t_total)) / 1e6;
+
+    if (my_group == 0)
+        fprintf(stderr, "[Run#: %d] [Flow: %s - %s] %d: Bandwidth: %.2lf MB/sec\n", run_idx, my_host, peer_host, my_rank, bandwidth);
 }
 
 void get_peer_rank(int my_group, int group_rank, char *myhostname, int *my_peer, char **my_peer_host)
@@ -156,18 +188,20 @@ void allocate_tx_rx_buffers(void **buffer_tx, void **buffer_rx, int buff_len, in
 
 char group1_hostfile[128] = {0};
 int group_size = 0;
-int ppn = 1;
 
 struct options
 {
     int use_dotnet;
     int iters;
-    int buff_sz_mb;
+    int buff_sz;
     int uni_dir;
     int num_runs;
+    int ppn;
+    char uuid[64];
 };
 
 struct options bench_options = {0};
+FILE *log_fp = NULL;
 
 void parse_args(int argc, char **argv)
 {
@@ -193,7 +227,7 @@ void parse_args(int argc, char **argv)
 
         // specify processes per node (PPN)
         case 'p':
-            ppn = (int)atoi(optarg);
+            bench_options.ppn = (int)atoi(optarg);
             break;
 
         // iteration count
@@ -203,7 +237,7 @@ void parse_args(int argc, char **argv)
 
         // buffer size in MB
         case 'b':
-            bench_options.buff_sz_mb = (int)atoi(optarg);
+            bench_options.buff_sz = (int)atoi(optarg);
             break;
 
         // uni-directional benchmark
@@ -221,6 +255,10 @@ void parse_args(int argc, char **argv)
             MPI_Abort(MPI_COMM_WORLD, -1);
         }
     }
+
+    uuid_t uuid;
+    uuid_generate(uuid);
+    uuid_unparse(uuid, &bench_options.uuid[0]);
 }
 
 int main(int argc, char **argv)
@@ -239,7 +277,7 @@ int main(int argc, char **argv)
     bench_options.use_dotnet = 0;
     bench_options.uni_dir = 0;
     bench_options.iters = DEF_ITERS;
-    bench_options.buff_sz_mb = DEF_BUF_SZ_MB;
+    bench_options.buff_sz = DEF_BUF_SZ;
     bench_options.num_runs = 1;
 
     if (world_rank == 0)
@@ -247,9 +285,9 @@ int main(int argc, char **argv)
         parse_args(argc, argv);
 
         // validate group_size
-        if (group_size <= 0 || group_size != world_size / (2 * ppn))
+        if (group_size <= 0 || group_size != world_size / (2 * bench_options.ppn))
         {
-            fprintf(stderr, "invalid group_size: %d, world_size: %d, ppn: %d\n", group_size, world_size, ppn);
+            fprintf(stderr, "invalid group_size: %d, world_size: %d, ppn: %d\n", group_size, world_size, bench_options.ppn);
             MPI_Abort(MPI_COMM_WORLD, -1);
         }
 
@@ -309,16 +347,32 @@ int main(int argc, char **argv)
             myhostname, world_rank, world_size, my_group, group_size, group_rank, my_peer, my_peer_host);
 
     void *buffer_tx, *buffer_rx;
-    int buff_len = bench_options.buff_sz_mb * 1024 * 1024;
+    int buff_len = bench_options.buff_sz;
     if (!bench_options.use_dotnet)
     {
         allocate_tx_rx_buffers(&buffer_tx, &buffer_rx, buff_len, my_group);
     }
 
+    double t_last_logtime = 0.0;
+    t_last_logtime = MPI_Wtime();
+
     for (int run_idx = 0; run_idx < bench_options.num_runs; run_idx++ )
     {
         double t_start = 0.0, t_end = 0.0, t_end_local = 0.0;
         double my_time, min_time, max_time, sum_time;
+
+        if (log_fp == NULL || ((MPI_Wtime() - t_last_logtime) > LOG_REFRESH_TIME_SEC))
+        {
+            char fileName[MAX_HOST_SZ] = {0};
+
+            if (log_fp != NULL)
+                fclose(log_fp);
+
+            time_t t;
+            time(&t);
+            sprintf(fileName,"tcp-%s-%d-%ld.log", bench_options.uuid, world_rank, t);
+            log_fp = fopen(fileName, "w");
+        }
 
         MPI_Barrier(MPI_COMM_WORLD);
 
@@ -326,7 +380,8 @@ int main(int argc, char **argv)
         if (bench_options.use_dotnet)
         {
             // .Net based benchmark
-            do_launch_dotnet_bench();
+            do_launch_dotnet_bench(my_group, world_rank, my_peer, my_peer_host, myhostname, 
+                    bench_options.iters, buffer_tx, buffer_rx, buff_len, run_idx);
         }
         else
         {
@@ -351,6 +406,17 @@ int main(int argc, char **argv)
         {
             fprintf(stderr, "[Rank: %d Run#: %d]: Runtime: %.2lf sec\n", world_rank, run_idx, my_time);
         }
+        
+        {
+            time_t t;
+            time(&t);
+
+            // Timestamp:datetime,JobId:string,Rank:int,VMCount:int,LocalIP:string,RemoteIP:string,NumOfFlows:int,BufferSize:int,NumOfBuffers:int,TimeTakenms:real,RunId:int
+            fprintf(log_fp, "%ld,%s,%d,%d,%s,%s,%d,%d,%d,%.2lf,%d\n", 
+                    t, bench_options.uuid, world_rank, world_size/bench_options.ppn, 
+                    myhostname, my_peer_host, bench_options.ppn, buff_len, 
+                    bench_options.iters, my_time * 1000.0, run_idx);
+        }
 
         MPI_Barrier(MPI_COMM_WORLD);
         t_end = MPI_Wtime();
@@ -363,7 +429,11 @@ int main(int argc, char **argv)
         {
             fprintf(stderr, "[Run#: %d]: Total time: %.2lf sec, Min: %.2lf, Max: %.2lf, Avg: %.2lf\n", run_idx, (t_end - t_start), min_time, max_time, sum_time/world_size);
         }
+
     }
+
+    if (log_fp != NULL)
+        fclose(log_fp);
 
     if (!bench_options.use_dotnet)
     {

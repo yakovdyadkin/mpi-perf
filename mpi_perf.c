@@ -261,6 +261,20 @@ void parse_args(int argc, char **argv)
     uuid_unparse(uuid, &bench_options.uuid[0]);
 }
 
+void getformatted_time(char *buffer, int for_kusto)
+{
+    time_t t;
+    struct tm *tm_info;
+
+    time(&t);
+    tm_info = localtime(&t);
+
+    if (for_kusto)
+        strftime(buffer, MAX_HOST_SZ, "%Y-%m-%d %H:%M:%S", tm_info);
+    else
+        strftime(buffer, MAX_HOST_SZ, "%Y-%m-%d-%H-%M-%S", tm_info);
+}
+
 int main(int argc, char **argv)
 {
     int i = 0;
@@ -368,9 +382,9 @@ int main(int argc, char **argv)
             if (log_fp != NULL)
                 fclose(log_fp);
 
-            time_t t;
-            time(&t);
-            sprintf(fileName,"tcp-%s-%d-%ld.log", bench_options.uuid, world_rank, t);
+            char formatted_time[26] = {0};
+            getformatted_time(formatted_time, 0);
+            sprintf(fileName,"tcp-%s-%d-%s.log", bench_options.uuid, world_rank, formatted_time);
             log_fp = fopen(fileName, "w");
         }
 
@@ -408,12 +422,12 @@ int main(int argc, char **argv)
         }
         
         {
-            time_t t;
-            time(&t);
+            char formatted_time[MAX_HOST_SZ] = {0};
+            getformatted_time(formatted_time, 1);
 
             // Timestamp:datetime,JobId:string,Rank:int,VMCount:int,LocalIP:string,RemoteIP:string,NumOfFlows:int,BufferSize:int,NumOfBuffers:int,TimeTakenms:real,RunId:int
-            fprintf(log_fp, "%ld,%s,%d,%d,%s,%s,%d,%d,%d,%.2lf,%d\n", 
-                    t, bench_options.uuid, world_rank, world_size/bench_options.ppn, 
+            fprintf(log_fp, "%s,%s,%d,%d,%s,%s,%d,%d,%d,%.2lf,%d\n", 
+                    formatted_time, bench_options.uuid, world_rank, world_size/bench_options.ppn, 
                     myhostname, my_peer_host, bench_options.ppn, buff_len, 
                     bench_options.iters, my_time * 1000.0, run_idx);
         }

@@ -454,6 +454,7 @@ int main(int argc, char **argv)
         free(buffer_tx);
         free(buffer_rx);
     }
+    MPI_Barrier(MPI_COMM_WORLD);
 
     MPI_Finalize();
 }

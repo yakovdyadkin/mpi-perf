@@ -400,6 +400,7 @@ int main(int argc, char **argv)
         allocate_tx_rx_buffers(&buffer_tx, &buffer_rx, buff_len, my_group);
     }
 
+    // core benchmark
     double t_last_logtime = 0.0;
     t_last_logtime = MPI_Wtime();
 
@@ -426,7 +427,7 @@ int main(int argc, char **argv)
         t_start = MPI_Wtime();
         if (bench_options.use_dotnet)
         {
-            // .Net based benchmark
+            // .Net based benchmark; MPI is used just for launching
             do_launch_dotnet_bench(my_group, world_rank, my_peer, peer_ipaddr, my_ipaddr,
                     buff_len, bench_options.iters, run_idx, bench_options.ppn);
         }
@@ -454,11 +455,13 @@ int main(int argc, char **argv)
             fprintf(stderr, "[Rank: %d Run#: %d]: Runtime: %.2lf sec\n", world_rank, run_idx, my_time);
         }
         
+        // generate data for kusto ingestion; dotnet benchmark reports this inside the dotnet benchmark
+        if (!bench_options.use_dotnet)
         {
             char formatted_time[MAX_HOST_SZ] = {0};
             getformatted_time(formatted_time, 1);
 
-            // Timestamp:datetime,JobId:string,Rank:int,VMCount:int,LocalIP:string,RemoteIP:string,NumOfFlows:int,BufferSize:int,NumOfBuffers:int,TimeTakenms:real,RunId:int
+            // format: Timestamp:datetime,JobId:string,Rank:int,VMCount:int,LocalIP:string,RemoteIP:string,NumOfFlows:int,BufferSize:int,NumOfBuffers:int,TimeTakenms:real,RunId:int
             fprintf(log_fp, "%s,%s,%d,%d,%s,%s,%d,%d,%d,%.2lf,%d\n", 
                     formatted_time, bench_options.uuid, world_rank, world_size/bench_options.ppn, 
                     myhostname, my_peer_host, bench_options.ppn, buff_len, 

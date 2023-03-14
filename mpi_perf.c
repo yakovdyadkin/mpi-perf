@@ -6,6 +6,8 @@
 #include <string.h>
 #include <ctype.h>
 #include <uuid/uuid.h>
+#include <netdb.h>
+#include <arpa/inet.h>
 
 #define MAX_HOST_SZ (128)
 #define DEF_BUF_SZ (456131)
@@ -102,41 +104,65 @@ void do_mpi_benchmark_unidir(int my_group, int my_rank, int peer_rank, char *pee
         fprintf(stderr, "[Run#: %d] [Flow: %s - %s] %d: Bandwidth: %.2lf MB/sec\n", run_idx, my_host, peer_host, my_rank, bandwidth);
 }
 
-void do_launch_dotnet_bench(int my_group, int my_rank, int peer_rank, char *peer_host, char *my_host,
-                             int iters, void *buffer_tx, void *buffer_rx, int buff_len, int run_idx)
+void do_launch_dotnet_bench(int my_group, int my_rank, int peer_rank, char *peer_ipaddr, char *my_ipaddr,
+                             int buff_len, int iters, int run_idx, int ppn)
 {
-    double t_start = 0.0, t_end = 0.0, t_total = 0.0, bandwidth = 0.0;
-
-    t_start = MPI_Wtime();
-    for (int i = 0; i < iters; i++)
-    {
-        if (my_group == 0)
-        {
-            // server
-            // dotnet /mnt/anfvol/tepati/clientserverapp/bin/Release/net6.0/clientserverapp.dll server 127.0.0.1 40000 1 10 456131 10 0 true
-            char command[100];
-            sprintf(command, "sleep 1");
-            system(command);
-        }
-        else
-        {
-            // dotnet /home/tepati/clientserverapp/bin/Release/net6.0/clientserverapp.dll client 10.0.0.254 40000 10 456131 10 0 true
-            char command[100];
-            sprintf(command, "sleep 1");
-            system(command);
-        }
-    }
-
-    t_end = MPI_Wtime();
-    t_total = t_end - t_start;
-
-    bandwidth = ((1 * buff_len * iters) / (t_total)) / 1e6;
+#define DEF_PORT (40000)
+    char command[1024] = {0};
 
     if (my_group == 0)
-        fprintf(stderr, "[Run#: %d] [Flow: %s - %s] %d: Bandwidth: %.2lf MB/sec\n", run_idx, my_host, peer_host, my_rank, bandwidth);
+    {
+        sprintf(command, "dotnet /mnt/anfvol/tepati/clientserverapp/bin/Release/net6.0/clientserverapp.dll server %s %d 1 %d %d %d %d true",
+                my_ipaddr, DEF_PORT + my_rank, ppn, buff_len, iters, 0);
+        //system(command);
+        fprintf(stderr, "%s\n", command);
+    }
+    else
+    {
+        sprintf(command, "dotnet /mnt/anfvol/tepati/clientserverapp/bin/Release/net6.0/clientserverapp.dll client %s %d %d %d %d %d true",
+                peer_ipaddr, DEF_PORT + peer_rank, ppn, buff_len, iters, 0);
+        //system(command);
+        fprintf(stderr, "%s\n", command);
+
+    }
 }
 
-void get_peer_rank(int my_group, int group_rank, char *myhostname, int *my_peer, char **my_peer_host)
+
+void get_ipaddress(char *hostname, char *ipstr)
+{
+    struct addrinfo hints, *res;
+    int status;
+
+    memset(&hints, 0, sizeof hints);
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_STREAM;
+
+    if ((status = getaddrinfo(hostname, NULL, &hints, &res)) != 0)
+    {
+        fprintf(stderr, "getaddrinfo error: %s\n", gai_strerror(status));
+        MPI_Abort(MPI_COMM_WORLD, -1);
+    }
+
+    void *addr;
+    char *ipver;
+
+    // loop through all the results and get the address
+    for (struct addrinfo *p = res; p != NULL; p = p->ai_next)
+    {
+        struct sockaddr_in *ipv4 = (struct sockaddr_in *)p->ai_addr;
+        addr = &(ipv4->sin_addr);
+        ipver = "IPv4";
+
+        // convert the IP to a string and print it:
+        inet_ntop(p->ai_family, addr, ipstr, INET_ADDRSTRLEN);
+        printf("%s: %s\n", ipver, ipstr);
+    }
+
+    freeaddrinfo(res); // free the linked list
+}
+
+void get_peer_rank(int my_group, int group_rank, char *myhostname, int *my_peer, char **my_peer_host,
+        char *my_ipaddr, char *peer_ipaddr)
 {
     // do allgather to find out the peers
     struct node_info
@@ -170,6 +196,9 @@ void get_peer_rank(int my_group, int group_rank, char *myhostname, int *my_peer,
             break;
         }
     }
+
+    get_ipaddress(myhostname, my_ipaddr);
+    get_ipaddress(*my_peer_host, peer_ipaddr);
 }
 
 void allocate_tx_rx_buffers(void **buffer_tx, void **buffer_rx, int buff_len, int my_group)
@@ -275,6 +304,7 @@ void getformatted_time(char *buffer, int for_kusto)
         strftime(buffer, MAX_HOST_SZ, "%Y-%m-%d-%H-%M-%S", tm_info);
 }
 
+
 int main(int argc, char **argv)
 {
     int i = 0;
@@ -299,7 +329,7 @@ int main(int argc, char **argv)
         parse_args(argc, argv);
 
         // validate group_size
-        if (group_size <= 0 || group_size != world_size / (2 * bench_options.ppn))
+        if (group_size <= 0 || (!bench_options.uni_dir && group_size != world_size / (2 * bench_options.ppn)))
         {
             fprintf(stderr, "invalid group_size: %d, world_size: %d, ppn: %d\n", group_size, world_size, bench_options.ppn);
             MPI_Abort(MPI_COMM_WORLD, -1);
@@ -355,10 +385,13 @@ int main(int argc, char **argv)
     // identify peer node
     int my_peer = -1;
     char *my_peer_host = NULL;
-    get_peer_rank(my_group, group_rank, (char *)myhostname, &my_peer, &my_peer_host);
+    char my_ipaddr[INET_ADDRSTRLEN] = {0};
+    char peer_ipaddr[INET_ADDRSTRLEN] = {0};
 
-    fprintf(stderr, "INFO: %s, rank %d out of %d ranks, my_group: %d, group_size: %d, group_rank: %d, my_peer: %d, peer_host: %s\n",
-            myhostname, world_rank, world_size, my_group, group_size, group_rank, my_peer, my_peer_host);
+    get_peer_rank(my_group, group_rank, (char *)myhostname, &my_peer, &my_peer_host, my_ipaddr, peer_ipaddr);
+
+    fprintf(stderr, "INFO: %s, rank %d out of %d ranks, my_group: %d, group_size: %d, group_rank: %d, my_peer: %d, hostname: %s (%s), peer_host: %s (%s)\n",
+            myhostname, world_rank, world_size, my_group, group_size, group_rank, my_peer, myhostname, my_ipaddr, my_peer_host, peer_ipaddr);
 
     void *buffer_tx, *buffer_rx;
     int buff_len = bench_options.buff_sz;
@@ -394,8 +427,8 @@ int main(int argc, char **argv)
         if (bench_options.use_dotnet)
         {
             // .Net based benchmark
-            do_launch_dotnet_bench(my_group, world_rank, my_peer, my_peer_host, myhostname, 
-                    bench_options.iters, buffer_tx, buffer_rx, buff_len, run_idx);
+            do_launch_dotnet_bench(my_group, world_rank, my_peer, peer_ipaddr, my_ipaddr,
+                    buff_len, bench_options.iters, run_idx, bench_options.ppn);
         }
         else
         {

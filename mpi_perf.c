@@ -18,9 +18,14 @@ int world_size, world_rank;
 
 void print_usage()
 {
-    fprintf(stderr, "Usage: <program> \n -f <group1-hosts> \n -n <group1-size> \n \
-		    -d <use-dotnet 0|1> \n -p <ppn> \n -i <iters> \n \
-		    -b <buffer-size>\n -u <uni-directional (MPI-only) 0|1> \n -r <number-of-runs>");
+    fprintf(stderr, "Usage: <program> \n\
+		    -f <group1-hosts>\n\
+		    -n <group1-size> \n\
+		    -d <use-dotnet 0|1>\n\
+		    -p <ppn> \n -i <iters>\n\
+		    -b <buffer-size>\n\
+		    -u <uni-directional (MPI-only) 0|1>\n\
+		    -r <number-of-runs>");
 }
 
 int strnicmp(const char *s1, const char *s2, size_t n)
@@ -48,9 +53,6 @@ void do_mpi_benchmark(int my_group, int my_rank, int peer_rank, char *peer_host,
                       int iters, void *buffer_tx, void *buffer_rx, int buff_len, int run_idx)
 {
     MPI_Status status;
-    double t_start = 0.0, t_end = 0.0, t_total = 0.0, bandwidth = 0.0;
-
-    t_start = MPI_Wtime();
     for (int i = 0; i < iters; i++)
     {
         if (my_group == 0)
@@ -64,13 +66,6 @@ void do_mpi_benchmark(int my_group, int my_rank, int peer_rank, char *peer_host,
             MPI_Send(buffer_tx, buff_len, MPI_CHAR, peer_rank, 2, MPI_COMM_WORLD);
         }
     }
-    t_end = MPI_Wtime();
-    t_total = t_end - t_start;
-
-    bandwidth = ((2 * buff_len * iters) / (t_total)) / 1e6;
-
-    if (my_group == 0)
-        fprintf(stderr, "[Run#: %d] [Flow: %s - %s] %d: Bi-Bandwidth: %.2lf MB/sec\n", run_idx, my_host, peer_host, my_rank, bandwidth);
 }
 
 void do_mpi_benchmark_unidir(int my_group, int my_rank, int peer_rank, char *peer_host, char *my_host,
@@ -78,9 +73,6 @@ void do_mpi_benchmark_unidir(int my_group, int my_rank, int peer_rank, char *pee
 {
     MPI_Status status;
 
-    double t_start = 0.0, t_end = 0.0, t_total = 0.0, bandwidth = 0.0;
-
-    t_start = MPI_Wtime();
     for (int i = 0; i < iters; i++)
     {
         if (my_group == 0)
@@ -94,14 +86,6 @@ void do_mpi_benchmark_unidir(int my_group, int my_rank, int peer_rank, char *pee
             MPI_Send(buffer_tx, 1, MPI_CHAR, peer_rank, 2, MPI_COMM_WORLD);
         }
     }
-
-    t_end = MPI_Wtime();
-    t_total = t_end - t_start;
-
-    bandwidth = ((1 * buff_len * iters) / (t_total)) / 1e6;
-
-    if (my_group == 0)
-        fprintf(stderr, "[Run#: %d] [Flow: %s - %s] %d: Bandwidth: %.2lf MB/sec\n", run_idx, my_host, peer_host, my_rank, bandwidth);
 }
 
 void do_launch_dotnet_bench(int my_group, int my_rank, int peer_rank, char *peer_ipaddr, char *my_ipaddr,

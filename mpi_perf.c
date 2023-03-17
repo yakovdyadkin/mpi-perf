@@ -25,7 +25,8 @@ void print_usage()
 		    -p <ppn> \n -i <iters>\n\
 		    -b <buffer-size>\n\
 		    -u <uni-directional (MPI-only) 0|1>\n\
-		    -r <number-of-runs>");
+		    -r <number-of-runs>\n\
+		    -l <logfolder>");
 }
 
 int strnicmp(const char *s1, const char *s2, size_t n)
@@ -50,12 +51,12 @@ int strnicmp(const char *s1, const char *s2, size_t n)
 }
 
 void do_mpi_benchmark(int my_group, int my_rank, int peer_rank, char *peer_host, char *my_host,
-                      int iters, void *buffer_tx, void *buffer_rx, int buff_len, int run_idx)
+                      int iters, void *buffer_tx, void *buffer_rx, int buff_len)
 {
     MPI_Status status;
     for (int i = 0; i < iters; i++)
     {
-        if (my_group == 0)
+        if (my_group == 1)
         {
             MPI_Send(buffer_tx, buff_len, MPI_CHAR, peer_rank, 1, MPI_COMM_WORLD);
             MPI_Recv(buffer_rx, buff_len, MPI_CHAR, peer_rank, 2, MPI_COMM_WORLD, &status);
@@ -69,13 +70,13 @@ void do_mpi_benchmark(int my_group, int my_rank, int peer_rank, char *peer_host,
 }
 
 void do_mpi_benchmark_unidir(int my_group, int my_rank, int peer_rank, char *peer_host, char *my_host,
-                             int iters, void *buffer_tx, void *buffer_rx, int buff_len, int run_idx)
+                             int iters, void *buffer_tx, void *buffer_rx, int buff_len)
 {
     MPI_Status status;
 
     for (int i = 0; i < iters; i++)
     {
-        if (my_group == 0)
+        if (my_group == 1)
         {
             MPI_Send(buffer_tx, buff_len, MPI_CHAR, peer_rank, 1, MPI_COMM_WORLD);
             MPI_Recv(buffer_rx, 1, MPI_CHAR, peer_rank, 2, MPI_COMM_WORLD, &status);
@@ -89,12 +90,12 @@ void do_mpi_benchmark_unidir(int my_group, int my_rank, int peer_rank, char *pee
 }
 
 void do_launch_dotnet_bench(int my_group, int my_rank, int peer_rank, char *peer_ipaddr, char *my_ipaddr,
-                             int buff_len, int iters, int run_idx, int ppn)
+                             int buff_len, int iters, long long int run_idx, int ppn)
 {
 #define DEF_PORT (40000)
     char command[1024] = {0};
 
-    if (my_group == 0)
+    if (my_group == 1)
     {
         sprintf(command, "dotnet /mnt/anfvol/tepati/clientserverapp/bin/Release/net6.0/clientserverapp.dll server %s %d 1 %d %d %d %d true",
                 my_ipaddr, DEF_PORT + my_rank, ppn, buff_len, iters, 0);
@@ -128,18 +129,14 @@ void get_ipaddress(char *hostname, char *ipstr)
     }
 
     void *addr;
-    char *ipver;
-
     // loop through all the results and get the address
     for (struct addrinfo *p = res; p != NULL; p = p->ai_next)
     {
         struct sockaddr_in *ipv4 = (struct sockaddr_in *)p->ai_addr;
         addr = &(ipv4->sin_addr);
-        ipver = "IPv4";
 
         // convert the IP to a string and print it:
         inet_ntop(p->ai_family, addr, ipstr, INET_ADDRSTRLEN);
-        printf("%s: %s\n", ipver, ipstr);
     }
 
     freeaddrinfo(res); // free the linked list
@@ -211,6 +208,7 @@ struct options
     int num_runs;
     int ppn;
     char uuid[64];
+    char logfolder[MAX_HOST_SZ];
 };
 
 struct options bench_options = {0};
@@ -219,7 +217,7 @@ FILE *log_fp = NULL;
 void parse_args(int argc, char **argv)
 {
     int opt;
-    while ((opt = getopt(argc, argv, ":f:n:d:p:i:b:u:h:r:")) != -1)
+    while ((opt = getopt(argc, argv, ":f:n:d:p:i:b:u:h:r:l:")) != -1)
     {
         switch (opt)
         {
@@ -263,6 +261,10 @@ void parse_args(int argc, char **argv)
             bench_options.num_runs = (int)atoi(optarg);
             break;
 
+	case 'l':
+	    strncpy(bench_options.logfolder, optarg, MAX_HOST_SZ);
+	    break;
+
         default:
             print_usage();
             MPI_Abort(MPI_COMM_WORLD, -1);
@@ -272,6 +274,7 @@ void parse_args(int argc, char **argv)
     uuid_t uuid;
     uuid_generate(uuid);
     uuid_unparse(uuid, &bench_options.uuid[0]);
+    fprintf(stderr, "UUID: %s\n", bench_options.uuid);
 }
 
 void getformatted_time(char *buffer, int for_kusto)
@@ -388,22 +391,23 @@ int main(int argc, char **argv)
     double t_last_logtime = 0.0;
     t_last_logtime = MPI_Wtime();
 
-    for (int run_idx = 0; run_idx < bench_options.num_runs; run_idx++ )
+    for (long long int run_idx = 0; bench_options.num_runs == -1 || run_idx < bench_options.num_runs; run_idx++ )
     {
         double t_start = 0.0, t_end = 0.0, t_end_local = 0.0;
         double my_time, min_time, max_time, sum_time;
 
         if (log_fp == NULL || ((MPI_Wtime() - t_last_logtime) > LOG_REFRESH_TIME_SEC))
         {
-            char fileName[MAX_HOST_SZ] = {0};
+            char fileName[2 * MAX_HOST_SZ] = {0};
 
             if (log_fp != NULL)
                 fclose(log_fp);
 
             char formatted_time[26] = {0};
             getformatted_time(formatted_time, 0);
-            sprintf(fileName,"tcp-%s-%d-%s.log", bench_options.uuid, world_rank, formatted_time);
+            sprintf(fileName,"%s/tcp-%s-%d-%s.log", bench_options.logfolder, bench_options.uuid, world_rank, formatted_time);
             log_fp = fopen(fileName, "w");
+	    t_last_logtime = MPI_Wtime();
         }
 
         MPI_Barrier(MPI_COMM_WORLD);
@@ -422,22 +426,22 @@ int main(int argc, char **argv)
             {
                 // uni-directional
                 do_mpi_benchmark_unidir(my_group, world_rank, my_peer, my_peer_host, myhostname, 
-                        bench_options.iters, buffer_tx, buffer_rx, buff_len, run_idx);
+                        bench_options.iters, buffer_tx, buffer_rx, buff_len);
             }
             else
             {
                 // bi-directional
                 do_mpi_benchmark(my_group, world_rank, my_peer, my_peer_host, myhostname,
-                        bench_options.iters, buffer_tx, buffer_rx, buff_len, run_idx);
+                        bench_options.iters, buffer_tx, buffer_rx, buff_len);
             }
         }
         t_end_local = MPI_Wtime();
         my_time = t_end_local - t_start;
 
-        if (my_group == 0)
-        {
-            fprintf(stderr, "[Rank: %d Run#: %d]: Runtime: %.2lf sec\n", world_rank, run_idx, my_time);
-        }
+        //if (my_group == 0)
+        //{
+        //    fprintf(stderr, "[Rank: %d Run#: %d]: Runtime: %.2lf sec\n", world_rank, run_idx, my_time);
+        //}
         
         // generate data for kusto ingestion; dotnet benchmark reports this inside the dotnet benchmark
         if (!bench_options.use_dotnet)
@@ -446,7 +450,7 @@ int main(int argc, char **argv)
             getformatted_time(formatted_time, 1);
 
             // format: Timestamp:datetime,JobId:string,Rank:int,VMCount:int,LocalIP:string,RemoteIP:string,NumOfFlows:int,BufferSize:int,NumOfBuffers:int,TimeTakenms:real,RunId:int
-            fprintf(log_fp, "%s,%s,%d,%d,%s,%s,%d,%d,%d,%.2lf,%d\n", 
+            fprintf(log_fp, "%s,%s,%d,%d,%s,%s,%d,%d,%d,%.2lf,%lld\n", 
                     formatted_time, bench_options.uuid, world_rank, world_size/bench_options.ppn, 
                     myhostname, my_peer_host, bench_options.ppn, buff_len, 
                     bench_options.iters, my_time * 1000.0, run_idx);
@@ -459,11 +463,11 @@ int main(int argc, char **argv)
         MPI_Allreduce(&my_time, &max_time, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
         MPI_Allreduce(&my_time, &sum_time, 1, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
 
-        if (world_rank == 0)
+        if (world_rank == 0 && (run_idx % 1000 == 0))
         {
-            fprintf(stderr, "[Run#: %d]: Total time: %.2lf sec, Min: %.2lf, Max: %.2lf, Avg: %.2lf\n", run_idx, (t_end - t_start), min_time, max_time, sum_time/world_size);
+            fprintf(stderr, "[Run#: %lld]: Total time: %.2lf ms, Min: %.2lf ms, Max: %.2lf ms, Avg: %.2lf ms\n", run_idx,
+			    (t_end - t_start) * 1000.0, min_time * 1000.0, max_time * 1000.0, (sum_time * 1000)/world_size);
         }
-
     }
 
     if (log_fp != NULL)

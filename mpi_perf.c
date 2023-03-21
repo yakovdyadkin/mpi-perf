@@ -8,6 +8,7 @@
 #include <uuid/uuid.h>
 #include <netdb.h>
 #include <arpa/inet.h>
+#include <assert.h>
 
 #define MAX_HOST_SZ (128)
 #define DEF_BUF_SZ (456131)
@@ -51,6 +52,17 @@ int strnicmp(const char *s1, const char *s2, size_t n)
     return result;
 }
 
+#define MPI_CHECK(stmt)                                          \
+do {                                                             \
+   int mpi_errno = (stmt);                                       \
+   if (MPI_SUCCESS != mpi_errno) {                               \
+       fprintf(stderr, "[%s:%d] MPI call failed with %d \n",     \
+        __FILE__, __LINE__,mpi_errno);                           \
+       exit(EXIT_FAILURE);                                       \
+   }                                                             \
+   assert(MPI_SUCCESS == mpi_errno);                             \
+} while (0)
+
 void do_mpi_benchmark(int my_group, int my_rank, int peer_rank, char *peer_host, char *my_host,
                       int iters, void *buffer_tx, void *buffer_rx, int buff_len)
 {
@@ -59,13 +71,13 @@ void do_mpi_benchmark(int my_group, int my_rank, int peer_rank, char *peer_host,
     {
         if (my_group == 1)
         {
-            MPI_Send(buffer_tx, buff_len, MPI_CHAR, peer_rank, 1, MPI_COMM_WORLD);
-            MPI_Recv(buffer_rx, buff_len, MPI_CHAR, peer_rank, 2, MPI_COMM_WORLD, &status);
+            MPI_CHECK(MPI_Send(buffer_tx, buff_len, MPI_CHAR, peer_rank, 1, MPI_COMM_WORLD));
+            MPI_CHECK(MPI_Recv(buffer_rx, buff_len, MPI_CHAR, peer_rank, 2, MPI_COMM_WORLD, &status));
         }
         else
         {
-            MPI_Recv(buffer_rx, buff_len, MPI_CHAR, peer_rank, 1, MPI_COMM_WORLD, &status);
-            MPI_Send(buffer_tx, buff_len, MPI_CHAR, peer_rank, 2, MPI_COMM_WORLD);
+            MPI_CHECK(MPI_Recv(buffer_rx, buff_len, MPI_CHAR, peer_rank, 1, MPI_COMM_WORLD, &status));
+            MPI_CHECK(MPI_Send(buffer_tx, buff_len, MPI_CHAR, peer_rank, 2, MPI_COMM_WORLD));
         }
     }
 }
@@ -84,19 +96,19 @@ void do_mpi_benchmark_nonblocking(int my_group, int my_rank, int peer_rank, char
     {
         if (my_group == 1)
         {
-            MPI_Isend(buffer_tx, buff_len, MPI_CHAR, peer_rank, 1, MPI_COMM_WORLD, &send_request[inflight]);
-            MPI_Irecv(buffer_rx, buff_len, MPI_CHAR, peer_rank, 2, MPI_COMM_WORLD, &recv_request[inflight]);
+            MPI_CHECK(MPI_Isend(buffer_tx, buff_len, MPI_CHAR, peer_rank, 1, MPI_COMM_WORLD, &send_request[inflight]));
+            MPI_CHECK(MPI_Irecv(buffer_rx, buff_len, MPI_CHAR, peer_rank, 2, MPI_COMM_WORLD, &recv_request[inflight]));
         }
         else
         {
-            MPI_Irecv(buffer_rx, buff_len, MPI_CHAR, peer_rank, 1, MPI_COMM_WORLD, &recv_request[inflight]);
-            MPI_Isend(buffer_tx, buff_len, MPI_CHAR, peer_rank, 2, MPI_COMM_WORLD, &send_request[inflight]);
+            MPI_CHECK(MPI_Irecv(buffer_rx, buff_len, MPI_CHAR, peer_rank, 1, MPI_COMM_WORLD, &recv_request[inflight]));
+            MPI_CHECK(MPI_Isend(buffer_tx, buff_len, MPI_CHAR, peer_rank, 2, MPI_COMM_WORLD, &send_request[inflight]));
         }
 
         if (inflight == MAX_REQ_NUM - 1)
         {
-            MPI_Waitall(inflight, send_request, sreqstat);
-            MPI_Waitall(inflight, recv_request, rreqstat);
+            MPI_CHECK(MPI_Waitall(inflight, send_request, sreqstat));
+            MPI_CHECK(MPI_Waitall(inflight, recv_request, rreqstat));
             inflight = 0;
         }
         else
@@ -107,8 +119,8 @@ void do_mpi_benchmark_nonblocking(int my_group, int my_rank, int peer_rank, char
 
     if (inflight > 0)
     {
-        MPI_Waitall(inflight, send_request, sreqstat);
-        MPI_Waitall(inflight, recv_request, rreqstat);
+        MPI_CHECK(MPI_Waitall(inflight, send_request, sreqstat));
+        MPI_CHECK(MPI_Waitall(inflight, recv_request, rreqstat));
     }
 }
 
@@ -121,13 +133,13 @@ void do_mpi_benchmark_unidir(int my_group, int my_rank, int peer_rank, char *pee
     {
         if (my_group == 1)
         {
-            MPI_Send(buffer_tx, buff_len, MPI_CHAR, peer_rank, 1, MPI_COMM_WORLD);
-            MPI_Recv(buffer_rx, 1, MPI_CHAR, peer_rank, 2, MPI_COMM_WORLD, &status);
+            MPI_CHECK(MPI_Send(buffer_tx, buff_len, MPI_CHAR, peer_rank, 1, MPI_COMM_WORLD));
+            MPI_CHECK(MPI_Recv(buffer_rx, 1, MPI_CHAR, peer_rank, 2, MPI_COMM_WORLD, &status));
         }
         else
         {
-            MPI_Recv(buffer_rx, buff_len, MPI_CHAR, peer_rank, 1, MPI_COMM_WORLD, &status);
-            MPI_Send(buffer_tx, 1, MPI_CHAR, peer_rank, 2, MPI_COMM_WORLD);
+            MPI_CHECK(MPI_Recv(buffer_rx, buff_len, MPI_CHAR, peer_rank, 1, MPI_COMM_WORLD, &status));
+            MPI_CHECK(MPI_Send(buffer_tx, 1, MPI_CHAR, peer_rank, 2, MPI_COMM_WORLD));
         }
     }
 }

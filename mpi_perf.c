@@ -26,7 +26,8 @@ void print_usage()
 		    -b <buffer-size>\n\
 		    -u <uni-directional (MPI-only) 0|1>\n\
 		    -r <number-of-runs>\n\
-		    -l <logfolder>");
+		    -l <logfolder>\n\
+		    -x <use non-blocking MPI calls>");
 }
 
 int strnicmp(const char *s1, const char *s2, size_t n)
@@ -66,6 +67,48 @@ void do_mpi_benchmark(int my_group, int my_rank, int peer_rank, char *peer_host,
             MPI_Recv(buffer_rx, buff_len, MPI_CHAR, peer_rank, 1, MPI_COMM_WORLD, &status);
             MPI_Send(buffer_tx, buff_len, MPI_CHAR, peer_rank, 2, MPI_COMM_WORLD);
         }
+    }
+}
+
+void do_mpi_benchmark_nonblocking(int my_group, int my_rank, int peer_rank, char *peer_host, char *my_host,
+                      int iters, void *buffer_tx, void *buffer_rx, int buff_len)
+{
+#define MAX_REQ_NUM 256
+    MPI_Status sreqstat[MAX_REQ_NUM];
+    MPI_Status rreqstat[MAX_REQ_NUM];
+    MPI_Request send_request[MAX_REQ_NUM];
+    MPI_Request recv_request[MAX_REQ_NUM];
+
+    int inflight = 0;
+    for (int i = 0; i < iters; i++)
+    {
+        if (my_group == 1)
+        {
+            MPI_Isend(buffer_tx, buff_len, MPI_CHAR, peer_rank, 1, MPI_COMM_WORLD, &send_request[inflight]);
+            MPI_Irecv(buffer_rx, buff_len, MPI_CHAR, peer_rank, 2, MPI_COMM_WORLD, &recv_request[inflight]);
+        }
+        else
+        {
+            MPI_Irecv(buffer_rx, buff_len, MPI_CHAR, peer_rank, 1, MPI_COMM_WORLD, &recv_request[inflight]);
+            MPI_Isend(buffer_tx, buff_len, MPI_CHAR, peer_rank, 2, MPI_COMM_WORLD, &send_request[inflight]);
+        }
+
+        if (inflight == MAX_REQ_NUM - 1)
+        {
+            MPI_Waitall(inflight, send_request, sreqstat);
+            MPI_Waitall(inflight, recv_request, rreqstat);
+            inflight = 0;
+        }
+        else
+        {
+            inflight++;
+        }
+    }
+
+    if (inflight > 0)
+    {
+        MPI_Waitall(inflight, send_request, sreqstat);
+        MPI_Waitall(inflight, recv_request, rreqstat);
     }
 }
 
@@ -184,8 +227,8 @@ void get_peer_rank(int my_group, int group_rank, char *myhostname, int *my_peer,
 
 void allocate_tx_rx_buffers(void **buffer_tx, void **buffer_rx, int buff_len, int my_group)
 {
-    *buffer_tx = malloc(buff_len);
-    *buffer_rx = malloc(buff_len);
+    posix_memalign(buffer_tx, 4096, buff_len);
+    posix_memalign(buffer_rx, 4096, buff_len);
     if (my_group == 0)
     {
         memset(*buffer_tx, 'a', buff_len);
@@ -207,6 +250,7 @@ struct options
     int uni_dir;
     int num_runs;
     int ppn;
+    int nonblocking;
     char uuid[64];
     char logfolder[MAX_HOST_SZ];
 };
@@ -217,7 +261,7 @@ FILE *log_fp = NULL;
 void parse_args(int argc, char **argv)
 {
     int opt;
-    while ((opt = getopt(argc, argv, ":f:n:d:p:i:b:u:h:r:l:")) != -1)
+    while ((opt = getopt(argc, argv, ":f:n:d:p:i:b:u:h:r:l:x:")) != -1)
     {
         switch (opt)
         {
@@ -259,6 +303,11 @@ void parse_args(int argc, char **argv)
         // number of runs
         case 'r':
             bench_options.num_runs = (int)atoi(optarg);
+            break;
+
+        // number of runs
+        case 'x':
+            bench_options.nonblocking = (int)atoi(optarg);
             break;
 
 	case 'l':
@@ -431,19 +480,31 @@ int main(int argc, char **argv)
             else
             {
                 // bi-directional
-                do_mpi_benchmark(my_group, world_rank, my_peer, my_peer_host, myhostname,
-                        bench_options.iters, buffer_tx, buffer_rx, buff_len);
+                if (bench_options.nonblocking)
+                {
+                    do_mpi_benchmark_nonblocking(my_group, world_rank, my_peer, my_peer_host, myhostname,
+                            bench_options.iters, buffer_tx, buffer_rx, buff_len);
+                }
+                else
+                {
+                    do_mpi_benchmark(my_group, world_rank, my_peer, my_peer_host, myhostname,
+                            bench_options.iters, buffer_tx, buffer_rx, buff_len);
+                }
             }
         }
         t_end_local = MPI_Wtime();
         my_time = t_end_local - t_start;
 
-        //if (my_group == 0)
-        //{
-        //    fprintf(stderr, "[Rank: %d Run#: %d]: Runtime: %.2lf sec\n", world_rank, run_idx, my_time);
-        //}
-        
-        // generate data for kusto ingestion; dotnet benchmark reports this inside the dotnet benchmark
+#ifdef REPORT_BANDWIDTH
+        if (my_group == 0)
+        {
+            long double gbits_transferred = 8.0 * buff_len * bench_options.iters * ((bench_options.uni_dir == 1) ? 1.0 : 2.0) * 1e-9;
+            long double bandwidth = (gbits_transferred * 1.0) / my_time;
+            fprintf(stderr, "[Rank: %d Run#: %lld]: Total Gbits: %Lf, Bandwidth: %.2Lf Gbps\n", world_rank, run_idx, gbits_transferred, bandwidth);
+        }
+#endif
+
+	    // generate data for kusto ingestion; dotnet benchmark reports this inside the dotnet benchmark
         if (!bench_options.use_dotnet)
         {
             char formatted_time[MAX_HOST_SZ] = {0};

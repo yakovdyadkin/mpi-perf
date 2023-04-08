@@ -212,7 +212,7 @@ void get_peer_rank(int my_group, int group_rank, char *myhostname, int *my_peer,
     *my_peer = -1;
     *my_peer_host = NULL;
 
-    struct node_info my_node_info;
+    struct node_info my_node_info={0};
     my_node_info.group_id = my_group;
     my_node_info.group_rank = group_rank;
     memcpy(my_node_info.hostname, myhostname, strlen(myhostname));
@@ -433,8 +433,8 @@ int main(int argc, char **argv)
     // identify peer node
     int my_peer = -1;
     char *my_peer_host = NULL;
-    char my_ipaddr[INET_ADDRSTRLEN] = {0};
-    char peer_ipaddr[INET_ADDRSTRLEN] = {0};
+    char my_ipaddr[MAX_HOST_SZ] = {0};
+    char peer_ipaddr[MAX_HOST_SZ] = {0};
 
     get_peer_rank(my_group, group_rank, (char *)myhostname, &my_peer, &my_peer_host, my_ipaddr, peer_ipaddr);
 
@@ -525,7 +525,7 @@ int main(int argc, char **argv)
             // format: Timestamp:datetime,JobId:string,Rank:int,VMCount:int,LocalIP:string,RemoteIP:string,NumOfFlows:int,BufferSize:int,NumOfBuffers:int,TimeTakenms:real,RunId:int
             fprintf(log_fp, "%s,%s,%d,%d,%s,%s,%d,%d,%d,%.2lf,%lld\n", 
                     formatted_time, bench_options.uuid, world_rank, world_size/bench_options.ppn, 
-                    myhostname, my_peer_host, bench_options.ppn, buff_len, 
+                    my_ipaddr, peer_ipaddr, bench_options.ppn, buff_len, 
                     bench_options.iters, my_time * 1000.0, run_idx);
         }
 

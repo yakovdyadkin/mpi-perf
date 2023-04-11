@@ -15,7 +15,7 @@
 #define DEF_ITERS (10)
 #define LOG_REFRESH_TIME_SEC (900)
 
-int world_size, world_rank;
+int world_size, world_rank, node_local_rank;
 
 void print_usage()
 {
@@ -352,6 +352,17 @@ void getformatted_time(char *buffer, int for_kusto)
         strftime(buffer, MAX_HOST_SZ, "%Y-%m-%d-%H-%M-%S", tm_info);
 }
 
+void kusto_injest()
+{
+    char command[1024] = {0};
+
+    if (node_local_rank != 0)
+    {
+	return;
+    }
+    sprintf(command, "/usr/bin/numactl -N 1 /usr/bin/python3 /home/azhpcuser/kusto-service/kusto_ingest.py -f 10");
+    system(command);
+}
 
 int main(int argc, char **argv)
 {
@@ -363,6 +374,14 @@ int main(int argc, char **argv)
 
     MPI_Comm_size(MPI_COMM_WORLD, &world_size);
     MPI_Comm_rank(MPI_COMM_WORLD, &world_rank);
+
+    char *local_rank_str = getenv("OMPI_COMM_WORLD_LOCAL_RANK");
+    if (local_rank_str == NULL)
+    {
+	    fprintf(stderr, "failed to read OMPI_COMM_WORLD_LOCAL_RANK\n");
+	    MPI_Abort(MPI_COMM_WORLD, -1);
+    }
+    node_local_rank = atoi(local_rank_str);
 
     char *group1_hostnames = NULL;
 
@@ -457,12 +476,18 @@ int main(int argc, char **argv)
         double t_start = 0.0, t_end = 0.0, t_end_local = 0.0;
         double my_time, min_time, max_time, sum_time;
 
-        if (log_fp == NULL || ((MPI_Wtime() - t_last_logtime) > LOG_REFRESH_TIME_SEC))
+        if (my_group == 1 && (log_fp == NULL || ((MPI_Wtime() - t_last_logtime) > LOG_REFRESH_TIME_SEC)))
         {
             char fileName[2 * MAX_HOST_SZ] = {0};
 
-            if (log_fp != NULL)
+            if (log_fp != NULL) {
+		fflush(log_fp);
                 fclose(log_fp);
+
+	    }
+
+	    // invoke kusto agent to upload results
+	    kusto_injest();
 
             char formatted_time[26] = {0};
             getformatted_time(formatted_time, 0);
@@ -517,7 +542,7 @@ int main(int argc, char **argv)
 #endif
 
 	    // generate data for kusto ingestion; dotnet benchmark reports this inside the dotnet benchmark
-        if (!bench_options.use_dotnet)
+        if (bench_options.use_dotnet == 0 && run_idx > 0 && my_group == 1)
         {
             char formatted_time[MAX_HOST_SZ] = {0};
             getformatted_time(formatted_time, 1);

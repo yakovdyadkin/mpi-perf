@@ -360,7 +360,7 @@ void kusto_injest()
     {
 	return;
     }
-    sprintf(command, "/usr/bin/numactl -N 1 /usr/bin/python3 /home/azhpcuser/kusto-service/kusto_ingest.py -f 10");
+    sprintf(command, "/usr/bin/numactl -N 1 /usr/bin/python3 /home/azhpcuser/mpi-perf/kusto_ingest.py -f 10");
     system(command);
 }
 

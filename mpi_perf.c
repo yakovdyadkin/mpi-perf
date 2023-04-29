@@ -1,14 +1,17 @@
 #include <mpi.h>
+#include <winsock2.h>
+#include <ws2tcpip.h>
 #include <stdio.h>
 #include <stdbool.h>
 #include <stdlib.h>
-#include <unistd.h>
 #include <string.h>
 #include <ctype.h>
-#include <uuid/uuid.h>
-#include <netdb.h>
-#include <arpa/inet.h>
+#include <rpc.h>
 #include <assert.h>
+#include <time.h>
+#include <malloc.h>
+
+#pragma comment(lib, "Ws2_32.lib")
 
 #define MAX_HOST_SZ (128)
 #define DEF_BUF_SZ (456131)
@@ -170,6 +173,15 @@ void do_launch_dotnet_bench(int my_group, int my_rank, int peer_rank, char *peer
 
 void get_ipaddress(char *hostname, char *ipstr)
 {
+    WSADATA wsaData;
+
+    // Initialize Winsock
+    int iResult = WSAStartup(MAKEWORD(2, 2), &wsaData);
+    if (iResult != 0) {
+        fprintf(stderr, "WSAStartup failed: %d\n", iResult);
+        return 1;
+    }
+
     struct addrinfo hints, *res;
     int status;
 
@@ -195,6 +207,7 @@ void get_ipaddress(char *hostname, char *ipstr)
     }
 
     freeaddrinfo(res); // free the linked list
+    WSACleanup();
 }
 
 void get_peer_rank(int my_group, int group_rank, char *myhostname, int *my_peer, char **my_peer_host,
@@ -233,26 +246,30 @@ void get_peer_rank(int my_group, int group_rank, char *myhostname, int *my_peer,
         }
     }
 
-    get_ipaddress(myhostname, my_ipaddr);
-    get_ipaddress(*my_peer_host, peer_ipaddr);
+    // fprintf(stderr, "asdasd%d\n", *my_peer);
+    // get_ipaddress(*myhostname, my_ipaddr);
+    // get_ipaddress(*my_peer_host, peer_ipaddr);
+
 }
 
-void allocate_tx_rx_buffers(void **buffer_tx, void **buffer_rx, int buff_len, int my_group)
+void allocate_tx_rx_buffers(void *buffer_tx, void *buffer_rx, int buff_len, int my_group)
 {
-    posix_memalign(buffer_tx, 4096, buff_len);
-    posix_memalign(buffer_rx, 4096, buff_len);
+    // posix_memalign(buffer_tx, 4096, buff_len);
+    // posix_memalign(buffer_rx, 4096, buff_len);
+    buffer_tx = _aligned_malloc(buff_len, 4096);
+    buffer_rx = _aligned_malloc(buff_len, 4096);
     if (my_group == 0)
     {
-        memset(*buffer_tx, 'a', buff_len);
+        memset(buffer_tx, 'a', buff_len);
     }
     else
     {
-        memset(*buffer_tx, 'b', buff_len);
+        memset(buffer_tx, 'b', buff_len);
     }
 }
 
 char group1_hostfile[128] = {0};
-int group_size = 0;
+int group_size = 1;
 
 struct options
 {
@@ -270,73 +287,73 @@ struct options
 struct options bench_options = {0};
 FILE *log_fp = NULL;
 
-void parse_args(int argc, char **argv)
-{
-    int opt;
-    while ((opt = getopt(argc, argv, ":f:n:d:p:i:b:u:h:r:l:x:")) != -1)
-    {
-        switch (opt)
-        {
-        case 'f':
-            // group1 hostnames
-            strncpy(group1_hostfile, optarg, MAX_HOST_SZ);
-            break;
+// void parse_args(int argc, char **argv)
+// {
+//     int opt;
+//     while ((opt = getopt(argc, argv, ":f:n:d:p:i:b:u:h:r:l:x:")) != -1)
+//     {
+//         switch (opt)
+//         {
+//         case 'f':
+//             // group1 hostnames
+//             strncpy(group1_hostfile, optarg, MAX_HOST_SZ);
+//             break;
 
-        // no. of hosts in group1
-        case 'n':
-            group_size = (int)atoi(optarg);
-            break;
+//         // no. of hosts in group1
+//         case 'n':
+//             group_size = (int)atoi(optarg);
+//             break;
 
-        // use dotnet for benchmarking
-        case 'd':
-            bench_options.use_dotnet = (int)atoi(optarg);
-            break;
+//         // use dotnet for benchmarking
+//         case 'd':
+//             bench_options.use_dotnet = (int)atoi(optarg);
+//             break;
 
-        // specify processes per node (PPN)
-        case 'p':
-            bench_options.ppn = (int)atoi(optarg);
-            break;
+//         // specify processes per node (PPN)
+//         case 'p':
+//             bench_options.ppn = (int)atoi(optarg);
+//             break;
 
-        // iteration count
-        case 'i':
-            bench_options.iters = (int)atoi(optarg);
-            break;
+//         // iteration count
+//         case 'i':
+//             bench_options.iters = (int)atoi(optarg);
+//             break;
 
-        // buffer size in MB
-        case 'b':
-            bench_options.buff_sz = (int)atoi(optarg);
-            break;
+//         // buffer size in MB
+//         case 'b':
+//             bench_options.buff_sz = (int)atoi(optarg);
+//             break;
 
-        // uni-directional benchmark
-        case 'u':
-            bench_options.uni_dir = (int)atoi(optarg);
-            break;
+//         // uni-directional benchmark
+//         case 'u':
+//             bench_options.uni_dir = (int)atoi(optarg);
+//             break;
 
-        // number of runs
-        case 'r':
-            bench_options.num_runs = (int)atoi(optarg);
-            break;
+//         // number of runs
+//         case 'r':
+//             bench_options.num_runs = (int)atoi(optarg);
+//             break;
 
-        // number of runs
-        case 'x':
-            bench_options.nonblocking = (int)atoi(optarg);
-            break;
+//         // number of runs
+//         case 'x':
+//             bench_options.nonblocking = (int)atoi(optarg);
+//             break;
 
-	case 'l':
-	    strncpy(bench_options.logfolder, optarg, MAX_HOST_SZ);
-	    break;
+// 	case 'l':
+// 	    strncpy(bench_options.logfolder, optarg, MAX_HOST_SZ);
+// 	    break;
 
-        default:
-            print_usage();
-            MPI_Abort(MPI_COMM_WORLD, -1);
-        }
-    }
+//         default:
+//             print_usage();
+//             MPI_Abort(MPI_COMM_WORLD, -1);
+//         }
+//     }
 
-    uuid_t uuid;
-    uuid_generate(uuid);
-    uuid_unparse(uuid, &bench_options.uuid[0]);
-    fprintf(stderr, "UUID: %s\n", bench_options.uuid);
-}
+//     uuid_t uuid;
+//     uuid_generate(uuid);
+//     uuid_unparse(uuid, &bench_options.uuid[0]);
+//     fprintf(stderr, "UUID: %s\n", bench_options.uuid);
+// }
 
 void getformatted_time(char *buffer, int for_kusto)
 {
@@ -352,17 +369,17 @@ void getformatted_time(char *buffer, int for_kusto)
         strftime(buffer, MAX_HOST_SZ, "%Y-%m-%d-%H-%M-%S", tm_info);
 }
 
-void kusto_injest()
-{
-    char command[1024] = {0};
+// void kusto_injest()
+// {
+//     char command[1024] = {0};
 
-    if (node_local_rank != 0)
-    {
-	return;
-    }
-    sprintf(command, "/usr/bin/numactl -N 1 /usr/bin/python3 /home/azhpcuser/mpi-perf/kusto_ingest.py -f 10");
-    system(command);
-}
+//     if (node_local_rank != 0)
+//     {
+// 	return;
+//     }
+//     sprintf(command, "/usr/bin/numactl -N 1 /usr/bin/python3 /home/azhpcuser/mpi-perf/kusto_ingest.py -f 10");
+//     system(command);
+// }
 
 int main(int argc, char **argv)
 {
@@ -375,13 +392,14 @@ int main(int argc, char **argv)
     MPI_Comm_size(MPI_COMM_WORLD, &world_size);
     MPI_Comm_rank(MPI_COMM_WORLD, &world_rank);
 
-    char *local_rank_str = getenv("OMPI_COMM_WORLD_LOCAL_RANK");
-    if (local_rank_str == NULL)
-    {
-	    fprintf(stderr, "failed to read OMPI_COMM_WORLD_LOCAL_RANK\n");
-	    MPI_Abort(MPI_COMM_WORLD, -1);
-    }
-    node_local_rank = atoi(local_rank_str);
+    // Needed for Kusto
+    // char *local_rank_str = getenv("OMPI_COMM_WORLD_LOCAL_RANK");
+    // if (local_rank_str == NULL)
+    // {
+	//     fprintf(stderr, "failed to read OMPI_COMM_WORLD_LOCAL_RANK\n");
+	//     MPI_Abort(MPI_COMM_WORLD, -1);
+    // }
+    // node_local_rank = atoi(local_rank_str);
 
     char *group1_hostnames = NULL;
 
@@ -390,11 +408,11 @@ int main(int argc, char **argv)
     bench_options.iters = DEF_ITERS;
     bench_options.buff_sz = DEF_BUF_SZ;
     bench_options.num_runs = 1;
+    bench_options.ppn = 1;
 
     if (world_rank == 0)
     {
-        parse_args(argc, argv);
-
+        // parse_args(argc, argv);
         // validate group_size
         if (group_size <= 0 || (!bench_options.uni_dir && group_size != world_size / (2 * bench_options.ppn)))
         {
@@ -407,7 +425,8 @@ int main(int argc, char **argv)
         memset(group1_hostnames, 0, group_size * MAX_HOST_SZ);
 
         FILE *fptr = NULL;
-        fptr = fopen(group1_hostfile, "r");
+        // fptr = fopen(group1_hostfile, "r");
+        fptr = fopen("./hosts.txt", "r");
         if (fptr == NULL)
         {
             fprintf(stderr, "cannot open group1 file: %s\n", group1_hostfile);
@@ -464,7 +483,7 @@ int main(int argc, char **argv)
     int buff_len = bench_options.buff_sz;
     if (!bench_options.use_dotnet)
     {
-        allocate_tx_rx_buffers(&buffer_tx, &buffer_rx, buff_len, my_group);
+        allocate_tx_rx_buffers(buffer_tx, buffer_rx, buff_len, my_group);
     }
 
     // core benchmark
@@ -487,7 +506,7 @@ int main(int argc, char **argv)
 	    }
 
 	    // invoke kusto agent to upload results
-	    kusto_injest();
+	    // kusto_injest();
 
             char formatted_time[26] = {0};
             getformatted_time(formatted_time, 0);
@@ -573,8 +592,8 @@ int main(int argc, char **argv)
 
     if (!bench_options.use_dotnet)
     {
-        free(buffer_tx);
-        free(buffer_rx);
+        _aligned_free(buffer_tx);
+        _aligned_free(buffer_rx);
     }
     MPI_Barrier(MPI_COMM_WORLD);
 

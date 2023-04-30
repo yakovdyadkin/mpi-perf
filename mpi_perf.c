@@ -12,6 +12,7 @@
 #include <malloc.h>
 
 #pragma comment(lib, "Ws2_32.lib")
+#pragma comment(lib, "rpcrt4.lib") 
 
 #define MAX_HOST_SZ (128)
 #define DEF_BUF_SZ (456131)
@@ -53,6 +54,36 @@ int strnicmp(const char *s1, const char *s2, size_t n)
         }
     }
     return result;
+}
+
+char* optarg = NULL;
+int optind = 1;
+
+int getopt(int argc, char *const argv[], const char *optstring)
+{
+    if ((optind >= argc) || (argv[optind][0] != '-') || (argv[optind][0] == 0))
+    {
+        return -1;
+    }
+
+    int opt = argv[optind][1];
+    const char *p = strchr(optstring, opt);
+
+    if (p == NULL)
+    {
+        return '?';
+    }
+    if (p[1] == ':')
+    {
+        optind++;
+        if (optind >= argc)
+        {
+            return '?';
+        }
+        optarg = argv[optind];
+        optind++;
+    }
+    return opt;
 }
 
 #define MPI_CHECK(stmt)                                          \
@@ -287,73 +318,76 @@ struct options
 struct options bench_options = {0};
 FILE *log_fp = NULL;
 
-// void parse_args(int argc, char **argv)
-// {
-//     int opt;
-//     while ((opt = getopt(argc, argv, ":f:n:d:p:i:b:u:h:r:l:x:")) != -1)
-//     {
-//         switch (opt)
-//         {
-//         case 'f':
-//             // group1 hostnames
-//             strncpy(group1_hostfile, optarg, MAX_HOST_SZ);
-//             break;
+void parse_args(int argc, char **argv)
+{
+    int opt;
+    while ((opt = getopt(argc, argv, ":f:n:d:p:i:b:u:h:r:l:x:")) != -1)
+    {
+        switch (opt)
+        {
+        case 'f':
+            // group1 hostnames
+            strncpy(group1_hostfile, optarg, MAX_HOST_SZ);
+            break;
 
-//         // no. of hosts in group1
-//         case 'n':
-//             group_size = (int)atoi(optarg);
-//             break;
+        // no. of hosts in group1
+        case 'n':
+            group_size = (int)atoi(optarg);
+            break;
 
-//         // use dotnet for benchmarking
-//         case 'd':
-//             bench_options.use_dotnet = (int)atoi(optarg);
-//             break;
+        // use dotnet for benchmarking
+        case 'd':
+            bench_options.use_dotnet = (int)atoi(optarg);
+            break;
 
-//         // specify processes per node (PPN)
-//         case 'p':
-//             bench_options.ppn = (int)atoi(optarg);
-//             break;
+        // specify processes per node (PPN)
+        case 'p':
+            bench_options.ppn = (int)atoi(optarg);
+            break;
 
-//         // iteration count
-//         case 'i':
-//             bench_options.iters = (int)atoi(optarg);
-//             break;
+        // iteration count
+        case 'i':
+            bench_options.iters = (int)atoi(optarg);
+            break;
 
-//         // buffer size in MB
-//         case 'b':
-//             bench_options.buff_sz = (int)atoi(optarg);
-//             break;
+        // buffer size in MB
+        case 'b':
+            bench_options.buff_sz = (int)atoi(optarg);
+            break;
 
-//         // uni-directional benchmark
-//         case 'u':
-//             bench_options.uni_dir = (int)atoi(optarg);
-//             break;
+        // uni-directional benchmark
+        case 'u':
+            bench_options.uni_dir = (int)atoi(optarg);
+            break;
 
-//         // number of runs
-//         case 'r':
-//             bench_options.num_runs = (int)atoi(optarg);
-//             break;
+        // number of runs
+        case 'r':
+            bench_options.num_runs = (int)atoi(optarg);
+            break;
 
-//         // number of runs
-//         case 'x':
-//             bench_options.nonblocking = (int)atoi(optarg);
-//             break;
+        // number of runs
+        case 'x':
+            bench_options.nonblocking = (int)atoi(optarg);
+            break;
 
-// 	case 'l':
-// 	    strncpy(bench_options.logfolder, optarg, MAX_HOST_SZ);
-// 	    break;
+	case 'l':
+	    strncpy(bench_options.logfolder, optarg, MAX_HOST_SZ);
+	    break;
 
-//         default:
-//             print_usage();
-//             MPI_Abort(MPI_COMM_WORLD, -1);
-//         }
-//     }
+        default:
+            print_usage();
+            MPI_Abort(MPI_COMM_WORLD, -1);
+        }
+    }
 
-//     uuid_t uuid;
-//     uuid_generate(uuid);
-//     uuid_unparse(uuid, &bench_options.uuid[0]);
-//     fprintf(stderr, "UUID: %s\n", bench_options.uuid);
-// }
+    UUID uuid;
+    UuidCreate(&uuid);
+    char *str;
+    UuidToStringA(&uuid, (RPC_CSTR*)&str);
+    strcpy(bench_options.uuid,str);
+    RpcStringFreeA((RPC_CSTR*)&str);
+    fprintf(stderr, "UUID: %s\n", bench_options.uuid);
+}
 
 void getformatted_time(char *buffer, int for_kusto)
 {
@@ -408,11 +442,11 @@ int main(int argc, char **argv)
     bench_options.iters = DEF_ITERS;
     bench_options.buff_sz = DEF_BUF_SZ;
     bench_options.num_runs = 1;
-    bench_options.ppn = 1;
 
     if (world_rank == 0)
     {
-        // parse_args(argc, argv);
+        parse_args(argc, argv);
+
         // validate group_size
         if (group_size <= 0 || (!bench_options.uni_dir && group_size != world_size / (2 * bench_options.ppn)))
         {
@@ -425,8 +459,7 @@ int main(int argc, char **argv)
         memset(group1_hostnames, 0, group_size * MAX_HOST_SZ);
 
         FILE *fptr = NULL;
-        // fptr = fopen(group1_hostfile, "r");
-        fptr = fopen("./hosts.txt", "r");
+        fptr = fopen(group1_hostfile, "r");
         if (fptr == NULL)
         {
             fprintf(stderr, "cannot open group1 file: %s\n", group1_hostfile);

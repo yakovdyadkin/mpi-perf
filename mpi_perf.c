@@ -1,4 +1,3 @@
-#include <mpi.h>
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <stdio.h>
@@ -10,6 +9,7 @@
 #include <assert.h>
 #include <time.h>
 #include <malloc.h>
+#include <mpi.h>
 
 #pragma comment(lib, "Ws2_32.lib")
 #pragma comment(lib, "rpcrt4.lib") 
@@ -210,7 +210,7 @@ void get_ipaddress(char *hostname, char *ipstr)
     int iResult = WSAStartup(MAKEWORD(2, 2), &wsaData);
     if (iResult != 0) {
         fprintf(stderr, "WSAStartup failed: %d\n", iResult);
-        return 1;
+        // return 1;
     }
 
     struct addrinfo hints, *res;
@@ -277,9 +277,8 @@ void get_peer_rank(int my_group, int group_rank, char *myhostname, int *my_peer,
         }
     }
 
-    // fprintf(stderr, "asdasd%d\n", *my_peer);
-    // get_ipaddress(*myhostname, my_ipaddr);
-    // get_ipaddress(*my_peer_host, peer_ipaddr);
+    get_ipaddress(myhostname, my_ipaddr);
+    get_ipaddress(*my_peer_host, peer_ipaddr);
 
 }
 
@@ -516,7 +515,17 @@ int main(int argc, char **argv)
     int buff_len = bench_options.buff_sz;
     if (!bench_options.use_dotnet)
     {
-        allocate_tx_rx_buffers(buffer_tx, buffer_rx, buff_len, my_group);
+        //allocate_tx_rx_buffers(buffer_tx, buffer_rx, buff_len, my_group);
+        buffer_tx = _aligned_malloc(buff_len, 4096);
+        buffer_rx = _aligned_malloc(buff_len, 4096);
+        if (my_group == 0)
+        {
+            memset(buffer_tx, 'a', buff_len);
+        }
+        else
+        {
+            memset(buffer_tx, 'b', buff_len);
+        }
     }
 
     // core benchmark

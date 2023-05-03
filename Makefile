@@ -2,15 +2,15 @@ ld=link
 cc=cl
 
 cflags=/I"C:\Program Files (x86)\Microsoft SDKs\MPI\Include"
-ldflags=/libpath:"C:\Program Files (x86)\Microsoft SDKs\MPI\Lib\x64"
+ldflags=/libpath:"C:\Program Files (x86)\Microsoft SDKs\MPI\Lib\x86"
 
 libs=msmpi.lib
 
 output=mpi_perf.exe
 objs=mpi_perf.obj
 
-# output=get_adder_info.exe
-# objs=get_adder_info.obj
+# output=HelloWorld.exe
+# objs=HelloWorld.obj
 
 all: $(objs)
 	$(ld) $(libs) $(ldflags) -out:$(output) $(objs)
